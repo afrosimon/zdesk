@@ -2,6 +2,8 @@ import sys
 import re
 import base64
 import pkg_resources
+from datetime import datetime
+import logging
 
 if sys.version < '3':
     from httplib import responses
@@ -150,12 +152,14 @@ class Zendesk(ZendeskAPI):
 
         while not all_requests_complete:
             # Make an http request
+            logging.info("[{}]before call to : {}".format(datetime.now(), url))
             response, content = self.client.request(
                                     url,
                                     method,
                                     body=body,
                                     headers=self.headers
                                 )
+            logging.info("[{}]after call to : {}".format(datetime.now(), url))
 
             # If the response status is not in the 200 range then assume an
             # error and raise proper exception
