@@ -152,14 +152,14 @@ class Zendesk(ZendeskAPI):
 
         while not all_requests_complete:
             # Make an http request
-            logging.info("[{}]before call to : {}".format(datetime.now(), url))
+            start = datetime.now()
             response, content = self.client.request(
                                     url,
                                     method,
                                     body=body,
                                     headers=self.headers
                                 )
-            logging.info("[{}]after call to : {}".format(datetime.now(), url))
+            logging.info("[{}]call duration (s) : {}".format(datetime.now() - start, url))
 
             # If the response status is not in the 200 range then assume an
             # error and raise proper exception
