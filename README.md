@@ -13,19 +13,27 @@ from this documentation.
 
 Zdesk works with both Python 2 and Python 3. Tested on Python 2.7.5 and 3.4.1.
 
-httplib2 is used for authentication and requests
+The requests package is used for authentication and requests
 
-    (pip install | easy_install) httplib2
+    pip install requests
 
-simplejson is used to serialize and deserialize requests and responses
+Note that if you are on an earlier version of Python on particular platforms,
+you can receive [an
+error](https://urllib3.readthedocs.org/en/latest/security.html#insecureplatformwarning)
+from `urllib3`, which is packaged in with `requests`. The simplest solution is
+to install or update the packages specified in the
+[solution](https://urllib3.readthedocs.org/en/latest/security.html#pyopenssl).
 
-    (pip install | easy_install) simplejson
+    pip install pyopenssl ndg-httpsclient pyasn1
+
+This should be all that is required. If additional steps are required this may
+be a `zdesk` bug, so please [report it](https://github.com/fprimex/zdesk/issues).
 
 ## Installation
 
 Zdesk is available on pypi, so installation should be fairly simple:
 
-    (pip install | easy_install) zdesk
+    pip install zdesk
 
 ## Related projects
 
@@ -71,7 +79,7 @@ only a single string in a particular header (location) is returned, and so
 that will be the return value.
 
 Passing `complete_response=True` will cause all response information to be
-returned, which is the result of an `httplib2.client.request`.
+returned, which is the result of a `requests.request`.
 
 ## Getting all pages
 
@@ -118,10 +126,33 @@ following code has worked well with zdesk scripts:
     with open(fname, 'rb') as fp:
         fdata = fp.read()
 
-    response = zd.upload_attachment(filename=fname,
+    response = zd.upload_create(filename=fname,
             data=fdata, mime_type=mime_type, complete_response=True)
 
     upload_token = response['content']['upload']['token']
+
+## Multipart file uploads (Help Center attachments)
+
+In addition to the `data` argument, zdesk methods can also take a `files`
+argument. This is a tuple which is passed directly to the `requests` module, so
+you may wish to reference [their
+documentation](http://requests.readthedocs.org/en/latest/user/quickstart/#post-a-multipart-encoded-file).
+
+Here is an example of using the `help_center_article_attachment_create` method.
+
+    zd.help_center_article_attachment_create(article_id='205654433', data={},
+            files={'file':('attach.zip', open('attach.zip', 'rb'))})
+
+The `data` parameter should always be supplied, containing any desired optional
+parameters such as `data={'inline':'true'}`, or `{}` otherwise. The file data
+can be provided directly in the tuple, and the MIME type can be explicitly
+specified.
+
+    with open('attach.zip', 'rb') as f:
+        fdata = f.read()
+
+    zd.help_center_article_attachment_create(article_id='205654433', data={},
+            files={'file':('attach.zip', fdata, 'application/zip')})
 
 # Example Use
 
@@ -142,15 +173,6 @@ zendesk = Zendesk('https://yourcompany.zendesk.com', 'you@yourcompany.com', 'pas
 # the command line and via a configuration file.
 # https://github.com/fprimex/zdeskcfg
 
-# Are you getting an error such as...
-# "SSL routines:SSL3_GET_SERVER_CERTIFICATE:certificate verify failed"?
-#zendesk = Zendesk('https://yourcompany.zendesk.com', 'you@yourcompany.com', 'passwd',
-#    client_args={
-#        "disable_ssl_certificate_validation": True
-#    }
-#)
-
-
 ################################################################
 ## TICKETS
 ################################################################
@@ -161,11 +183,13 @@ zendesk.tickets_list()
 # Create
 new_ticket = {
     'ticket': {
-        'requester_name': 'Howard Schultz',
-        'requester_email': 'howard@starbucks.com',
+        'requester': {
+            'name': 'Howard Schultz',
+            'email': 'howard@starbucks.com',
+        },
         'subject':'My Starbucks coffee is cold!',
         'description': 'please reheat my coffee',
-        'set_tags': 'coffee drinks',
+        'tags': ['coffee', 'drinks'],
         'ticket_field_entries': [
             {
                 'ticket_field_id': 1,

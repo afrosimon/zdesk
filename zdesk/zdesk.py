@@ -1,3 +1,4 @@
+import copy
 import sys
 import re
 import base64
@@ -5,19 +6,17 @@ import pkg_resources
 from datetime import datetime
 import logging
 
-if sys.version < '3':
+if sys.version_info.major < 3:
     from httplib import responses
-    from urllib import urlencode
     from urlparse import urlsplit
 else:
     from http.client import responses
-    from urllib.parse import urlencode, urlsplit
+    from urllib.parse import urlsplit
 
-
-import httplib2
-import simplejson as json
+import requests
 
 from .zdesk_api import ZendeskAPI
+
 
 def get_id_from_url(url):
     url_id = urlsplit(url).path.split('/')[-1].split('.')[0]
@@ -48,7 +47,6 @@ class RateLimitError(ZendeskError):
 class Zendesk(ZendeskAPI):
     """ Python API Wrapper for Zendesk"""
 
-
     def __init__(self, zdesk_url, zdesk_email=None, zdesk_password=None,
                  zdesk_token=False, headers=None, client_args=None,
                  api_version=2):
@@ -69,48 +67,104 @@ class Zendesk(ZendeskAPI):
             or a common one is to disable SSL certficate validation
             {"disable_ssl_certificate_validation": True}
         """
-        if not client_args: client_args = {}
-
         # Set attributes necessary for API
+        self._zdesk_url = None
+        self._zdesk_email = None
+        self._zdesk_password = None
+        self._zdesk_token = False
+
+        self.client = requests.Session()
+
         self.zdesk_url = zdesk_url.rstrip('/')
         self.zdesk_email = zdesk_email
-        if zdesk_token:
-            self.zdesk_email += "/token"
         self.zdesk_password = zdesk_password
+        self.zdesk_token = zdesk_token
 
         # Set headers
-        self.headers = headers
-        if self.headers is None:
-            version = pkg_resources.require("zdesk")[0].version
-            self.headers = {
-                'User-agent': 'Zdesk Python Library v%s' % version,
-                'Content-Type': 'application/json'
-            }
-
-        # Set http client and authentication
-        self.client = httplib2.Http(**client_args)
-        if (self.zdesk_email is not None and
-                self.zdesk_password is not None):
-            self.client.add_credentials(
-                self.zdesk_email,
-                self.zdesk_password
-            )
+        self.client_args = copy.deepcopy(client_args) or {}
+        self.headers = copy.deepcopy(headers) or {}
 
         if api_version != 2:
             raise ValueError("Unsupported Zendesk API Version: %d" %
                              api_version)
 
-    def call(self, path, query=None, method='GET', data=None, **kwargs):
-        """
-        Should probably url-encode GET query parameters on replacement
-        """
+    def _update_auth(self):
+        if self.zdesk_email and self.zdesk_password:
+            self.client.auth = (self.zdesk_email, self.zdesk_password)
+        else:
+            self.client.auth = None
 
-        # If requested, return all response information
-        complete_response = kwargs.pop('complete_response', False)
+    @property
+    def zdesk_url(self):
+        return self._zdesk_url
 
-        # If requested, exhaustively obtain and consolidate requests that
-        # contain a next_page attribute
-        get_all_pages = kwargs.pop('get_all_pages', False)
+    @zdesk_url.setter
+    def zdesk_url(self, value):
+        self._zdesk_url = value
+
+    @zdesk_url.deleter
+    def zdesk_url(self):
+        self._zdesk_url = None
+
+    @property
+    def zdesk_email(self):
+        if self.zdesk_token:
+            return self._zdesk_email + '/token'
+        else:
+            return self._zdesk_email
+
+    @zdesk_email.setter
+    def zdesk_email(self, value):
+        self._zdesk_email = value
+        self._update_auth()
+
+    @zdesk_email.deleter
+    def zdesk_email(self):
+        self._zdesk_email = None
+        self._update_auth()
+
+    @property
+    def zdesk_password(self):
+        return self._zdesk_password
+
+    @zdesk_password.setter
+    def zdesk_password(self, value):
+        self._zdesk_password = value
+        self._update_auth()
+
+    @zdesk_password.deleter
+    def zdesk_password(self):
+        self._zdesk_password = None
+        self._update_auth()
+
+    @property
+    def zdesk_token(self):
+        return self._zdesk_token
+
+    @zdesk_token.setter
+    def zdesk_token(self, value):
+        self._zdesk_token = bool(value)
+        self._update_auth()
+
+    @zdesk_token.deleter
+    def zdesk_token(self):
+        self._zdesk_token = False
+        self._update_auth()
+
+    def call(self, path, query=None, method='GET', data=None,
+             files=None, get_all_pages=False, complete_response=False,
+             **kwargs):
+        """Make a REST call to the Zendesk web service.
+
+        Parameters:
+        path - Path portion of the Zendesk REST endpoint URL.
+        query - Query parameters in dict form.
+        method - HTTP method to use in making the request.
+        data - POST data or multi-part form data to include.
+        files - Requests style dict of files for multi-part file uploads.
+        get_all_pages - Make multiple requests and follow next_page.
+        complete_response - Return raw request results.
+        """
 
         # Support specifying a mime-type other than application/json
         mime_type = kwargs.pop('mime_type', 'application/json')
@@ -128,24 +182,26 @@ class Zendesk(ZendeskAPI):
 
         url = self.zdesk_url + path
 
-        if kwargs:
-            url += '?' + urlencode(kwargs)
-
-        # If credentials are supplied, then always put them in the headers
-        if self.zdesk_email and self.zdesk_password:
-            auth = base64.b64encode(self.zdesk_email.encode('ascii') + b':' +
-                             self.zdesk_password.encode('ascii'))
-            self.headers["Authorization"] = "Basic {}".format(
-                                                        auth.decode('ascii'))
-        elif "Authorization" in self.headers:
-            del(self.headers["Authorization"])
-
-        if mime_type == "application/json":
-            body = json.dumps(data)
-            self.headers["Content-Type"] = "application/json"
+        if files:
+            # Sending multipart file. data contains parameters.
+            json = None
+            self.headers.pop('Content-Type', None)
+        elif (mime_type == 'application/json' and
+                (method == 'POST' or method == 'PUT')):
+            # Sending JSON data.
+            json = data
+            data = {}
+            self.headers.pop('Content-Type', None)
+        elif (mime_type != 'application/json' and
+                (method == 'POST' or method == 'PUT')):
+            # Uploading an attachment, probably.
+            # Specifying the MIME type is required.
+            json = None
+            self.headers['Content-Type'] = mime_type
         else:
-            body = data
-            self.headers["Content-Type"] = mime_type
+            # Probably a GET or DELETE. Not sending JSON or files.
+            json = None
+            self.headers.pop('Content-Type', None)
 
         results = []
         all_requests_complete = False
@@ -153,55 +209,62 @@ class Zendesk(ZendeskAPI):
         while not all_requests_complete:
             # Make an http request
             start = datetime.now()
-            response, content = self.client.request(
-                                    url,
-                                    method,
-                                    body=body,
-                                    headers=self.headers
-                                )
+            response = self.client.request(method,
+                                           url,
+                                           params=kwargs,
+                                           json=json,
+                                           data=data,
+                                           headers=self.headers,
+                                           files=files,
+                                           **self.client_args)
             logging.info("[{}]call duration (s) : {}".format(datetime.now() - start, url))
 
             # If the response status is not in the 200 range then assume an
             # error and raise proper exception
 
-            response_status = int(response.get('status', 0))
-
-            if response_status < 200 or response_status > 299:
-                if response_status == 401:
-                    raise AuthenticationError(content, response_status, response)
-                elif response_status == 429:
-                    # FYI: Check the Retry-After header for how many seconds to sleep
-                    raise RateLimitError(content, response_status, response)
+            if response.status_code < 200 or response.status_code > 299:
+                if response.status_code == 401:
+                    raise AuthenticationError(
+                        response.content, response.status_code, response)
+                elif response.status_code == 429:
+                    # FYI: Check the Retry-After header for how
+                    # many seconds to sleep
+                    raise RateLimitError(
+                        response.content, response.status_code, response)
                 else:
-                    raise ZendeskError(content, response_status, response)
+                    raise ZendeskError(
+                        response.content, response.status_code, response)
 
-            if content.strip():
-                content = json.loads(content)
+            if response.content.strip():
+                content = response.json()
 
                 # set url to the next page if that was returned in the response
                 url = content.get('next_page', None)
             else:
+                content = response.content
                 url = None
 
             if complete_response:
                 results.append({
                     'response': response,
                     'content': content,
-                    'status': response_status
+                    'status': response.status_code
                 })
 
             else:
-                # Deserialize json content if content exists. In some cases Zendesk
-                # returns ' ' strings. Also return false non strings (0, [], (), {})
-                if response.get('location'):
-                    # Zendesk's response is sometimes the url of a newly created user/
-                    # ticket/group/etc and they pass this through 'location'.  Otherwise,
-                    # the body of 'content' has our response.
-                    results.append(response.get('location'))
+                # Deserialize json content if content exists.
+                # In some cases Zendesk returns ' ' strings.
+                # Also return false non strings (0, [], (), {})
+                if response.headers.get('location'):
+                    # Zendesk's response is sometimes the url of a newly
+                    # created user/ticket/group/etc and they pass this through
+                    # 'location'.  Otherwise, the body of 'content'
+                    # has our response.
+                    results.append(response.headers.get('location'))
                 elif content:
                     results.append(content)
                 else:
-                    results.append(responses[response_status])
+                    results.append(responses[response.status_code])
 
             # if there is a next_page, and we are getting pages, then continue
             # making requests
@@ -253,8 +316,9 @@ class Zendesk(ZendeskAPI):
                 # (lists). if the attribute is a list, we will extend the
                 # combined attribute, otherwise we will just take the last
                 # attribute value from the last call.
-                # the end result is a response that looks like one giant call, to
-                # e.g. list tickets, but was actually made by multiple API calls.
+                # the end result is a response that looks like one giant call,
+                # to e.g. list tickets, but was actually made by multiple API
+                # calls.
                 for k in result.keys():
                     v = result[k]
                     if isinstance(v, list):
@@ -285,4 +349,3 @@ class Zendesk(ZendeskAPI):
         # perhaps, a sequence of empty dicts were returned or some such.
         # Send everything back.
         return results
-

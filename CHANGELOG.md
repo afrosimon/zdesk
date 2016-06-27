@@ -1,3 +1,19 @@
+## 2.4.0
+- Support non-JSON endpoint (removed check for .json, for recordings.mp3)
+- Improve generator formatting of duplicates
+- Add doc-anchor-links, so docstrings link more closely to the method question
+- Regenerate API from updated mirror. See [full
+  commit](https://github.com/fprimex/zdesk/commit/7240295278fd596189643ae30fbcbb16a4b8c3d9)
+
+## 2.3.0
+- Switch from `httplib2` to `requests`
+- Add `files` parameter to support multipart uploads for Help Center attachment
+  style requests
+- Enhance `api_gen.py` to handle downloading and patching of developer.zendesk.com
+- Add Zopim and numerous other API endpoints
+- Regenerate API from updated mirror. See [full
+  commit](https://github.com/fprimex/zdesk/commit/d679a734292de5ade82cb4d4533e79368510769d)
+
 ## 2.2.1
 - Remove `common_params`, allowing all kwargs to be passed as queries
 
